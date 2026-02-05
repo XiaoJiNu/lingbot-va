@@ -106,7 +106,22 @@ It is important to note that the inference server and client must be deployed on
 We also provide a script for image to video-action generation:
 
 ```bash
-NGPU=1 CONFIG_NAME='robotwin_i2av' bash script/run_launch_va_server_sync.sh 
+# Download checkpoints first, then point `--model_root` to the directory that contains:
+# `vae/`, `tokenizer/`, `text_encoder/`, `transformer/`.
+NGPU=1 CONFIG_NAME='robotwin_i2av' bash script/run_launch_va_server_sync.sh \
+  --model_root /path/to/pretrained/model \
+  --save_root visualization_i2av
+```
+
+The generated video will be saved to `${save_root}/demo.mp4`.
+
+For single-GPU local generation (no `torchrun`), you can also run:
+
+```bash
+python -m wan_va.wan_va_server \
+  --config-name robotwin_i2av \
+  --model_root /path/to/pretrained/model \
+  --save_root visualization_i2av
 ```
 
 

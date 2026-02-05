@@ -18,10 +18,10 @@ dependencies = [
     "diffusers>=0.36.0",
     "transformers>=4.55.4",
     "tokenizers>=0.21.4",
+    "einops",
     "tqdm",
-    "imageio",
-    "easydict",
-    "flash_attn",
+    "imageio[ffmpeg]",
+    "pillow",
     "numpy>=1.26.4,<2"
 ]
 
@@ -34,6 +34,16 @@ dev = [
     "mypy",
     "huggingface-hub[cli]"
 ]
+server = [
+    "websockets",
+    "msgpack",
+]
+text = [
+    "ftfy",
+]
+flashattn = [
+    "flash-attn",
+]
 
 [project.urls]
 homepage = "https://github.com/Robbyant"
@@ -44,10 +54,10 @@ modelscope = "https://github.com/Robbyant"
 discord = "https://github.com/Robbyant"
 
 [tool.setuptools]
-packages = ["lingbot_va"]
+packages = ["wan_va"]
 
 [tool.setuptools.package-data]
-"lingbot_va" = ["**/*.py"]
+"wan_va" = ["**/*.py"]
 
 [tool.black]
 line-length = 88
@@ -57,5 +67,4 @@ profile = "black"
 
 [tool.mypy]
 strict = true
-
 

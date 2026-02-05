@@ -1,5 +1,6 @@
 # Copyright 2024-2025 The Robbyant Team Authors. All rights reserved.
 import math
+import warnings
 from copy import deepcopy
 
 import torch
@@ -17,9 +18,12 @@ from diffusers.models.normalization import FP32LayerNorm
 from einops import rearrange
 
 try:
-    from flash_attn_interface import flash_attn_func
-except:
-    from flash_attn import flash_attn_func
+    from flash_attn_interface import flash_attn_func as _flash_attn_func  # type: ignore
+except Exception:  # pragma: no cover
+    try:
+        from flash_attn import flash_attn_func as _flash_attn_func  # type: ignore
+    except Exception:  # pragma: no cover
+        _flash_attn_func = None
 
 __all__ = ['WanTransformer3DModel']
 
@@ -135,7 +139,14 @@ class WanAttention(torch.nn.Module):
         if attn_mode == 'torch':
             self.attn_op = custom_sdpa
         elif attn_mode == 'flashattn':
-            self.attn_op = flash_attn_func
+            if _flash_attn_func is None:
+                warnings.warn(
+                    "flash-attn not available; falling back to torch SDPA.",
+                    RuntimeWarning,
+                )
+                self.attn_op = custom_sdpa
+            else:
+                self.attn_op = _flash_attn_func
         else:
             raise ValueError(
                 f"Unsupported attention mode: {attn_mode}, only support torch and flashattn"

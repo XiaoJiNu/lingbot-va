@@ -1,6 +1,9 @@
 # Copyright 2024-2025 The Robbyant Team Authors. All rights reserved.
 import torch
-from easydict import EasyDict
+try:
+    from easydict import EasyDict
+except ModuleNotFoundError:  # pragma: no cover
+    from wan_va.utils.easydict import EasyDict
 
 va_shared_cfg = EasyDict()
 
@@ -11,3 +14,5 @@ va_shared_cfg.param_dtype = torch.bfloat16
 va_shared_cfg.save_root = './visualization'
 
 va_shared_cfg.patch_size = (1, 2, 2)
+
+va_shared_cfg.infer_mode = 'server'

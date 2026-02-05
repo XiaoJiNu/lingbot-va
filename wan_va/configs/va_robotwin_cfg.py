@@ -1,12 +1,20 @@
 # Copyright 2024-2025 The Robbyant Team Authors. All rights reserved.
-from easydict import EasyDict
+import os
+
+try:
+    from easydict import EasyDict
+except ModuleNotFoundError:  # pragma: no cover
+    from wan_va.utils.easydict import EasyDict
 
 from .shared_config import va_shared_cfg
 
 va_robotwin_cfg = EasyDict(__name__='Config: VA robotwin')
 va_robotwin_cfg.update(va_shared_cfg)
 
-va_robotwin_cfg.wan22_pretrained_model_name_or_path = "/path/to/pretrained/model"
+va_robotwin_cfg.wan22_pretrained_model_name_or_path = os.getenv(
+    "WAN22_PRETRAINED_MODEL_NAME_OR_PATH",
+    "/path/to/pretrained/model",
+)
 
 va_robotwin_cfg.attn_window = 72
 va_robotwin_cfg.frame_chunk_size = 2

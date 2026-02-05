@@ -1,0 +1,13 @@
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+
+.vscode/
+.DS_Store
+
+# Generated inference/eval outputs
+visualization*/
+results/
+eval_result/
+

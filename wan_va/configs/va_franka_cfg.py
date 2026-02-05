@@ -1,14 +1,21 @@
 # Copyright 2024-2025 The Robbyant Team Authors. All rights reserved.
+import os
+
 import torch
-from easydict import EasyDict
+try:
+    from easydict import EasyDict
+except ModuleNotFoundError:  # pragma: no cover
+    from wan_va.utils.easydict import EasyDict
 
 from .shared_config import va_shared_cfg
 
 va_franka_cfg = EasyDict(__name__='Config: VA franka')
 va_franka_cfg.update(va_shared_cfg)
-va_shared_cfg.infer_mode = 'server'
 
-va_franka_cfg.wan22_pretrained_model_name_or_path = "/path/to/pretrained/model"
+va_franka_cfg.wan22_pretrained_model_name_or_path = os.getenv(
+    "WAN22_PRETRAINED_MODEL_NAME_OR_PATH",
+    "/path/to/pretrained/model",
+)
 
 va_franka_cfg.attn_window = 30
 va_franka_cfg.frame_chunk_size = 4

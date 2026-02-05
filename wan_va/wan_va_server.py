@@ -1,17 +1,25 @@
 # Copyright 2024-2025 The Robbyant Team Authors. All rights reserved.
 import argparse
+import html
+import json
 import os
+import re
 import sys
 import time
 from functools import partial
-from PIL import Image
-from diffusers.video_processor import VideoProcessor
-from diffusers.utils import export_to_video
 
 import numpy as np
 import torch
 import torch.nn.functional as F
-from diffusers.pipelines.wan.pipeline_wan import prompt_clean
+
+try:  # Best-effort CUDA init before importing libraries that probe CUDA.
+    torch.cuda.init()
+except Exception:  # pragma: no cover
+    pass
+
+from PIL import Image
+from diffusers.video_processor import VideoProcessor
+from diffusers.utils import export_to_video
 from einops import rearrange
 from tqdm import tqdm
 
@@ -37,6 +45,19 @@ from utils import (
     save_async,
 )
 
+try:
+    import ftfy  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover
+    ftfy = None
+
+
+def prompt_clean(text: str) -> str:
+    if ftfy is not None:
+        text = ftfy.fix_text(text)
+    text = html.unescape(html.unescape(text))
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
 
 class VA_Server:
 
@@ -45,7 +66,20 @@ class VA_Server:
         self.job_config = job_config
         self.save_root = job_config.save_root
         self.dtype = job_config.param_dtype
-        self.device = torch.device(f"cuda:{job_config.local_rank}")
+        self.device = torch.device("cpu")
+        if torch.cuda.is_available():
+            torch.cuda.set_device(job_config.local_rank)
+            self.device = torch.device(f"cuda:{job_config.local_rank}")
+        else:
+            try:  # Retry CUDA init once; some environments are flaky on first probe.
+                torch.cuda.init()
+                if torch.cuda.is_available():
+                    torch.cuda.set_device(job_config.local_rank)
+                    self.device = torch.device(f"cuda:{job_config.local_rank}")
+            except Exception:  # pragma: no cover
+                pass
+        self.text_embed_dim = self._load_text_embed_dim(
+            job_config.wan22_pretrained_model_name_or_path)
 
         self.scheduler = FlowMatchScheduler(shift=self.job_config.snr_shift,
                                             sigma_min=0.0,
@@ -69,12 +103,19 @@ class VA_Server:
             os.path.join(job_config.wan22_pretrained_model_name_or_path,
                          'tokenizer'), )
 
-        self.text_encoder = load_text_encoder(
-            os.path.join(job_config.wan22_pretrained_model_name_or_path,
-                         'text_encoder'),
-            torch_dtype=self.dtype,
-            torch_device=self.device,
-        )
+        self.text_encoder = None
+        if not getattr(job_config, "skip_text_encoder", False):
+            try:
+                self.text_encoder = load_text_encoder(
+                    os.path.join(job_config.wan22_pretrained_model_name_or_path,
+                                 'text_encoder'),
+                    torch_dtype=self.dtype,
+                    torch_device=self.device,
+                )
+            except Exception as exc:  # pragma: no cover
+                logger.warning(
+                    "Failed to load text encoder weights; falling back to dummy prompt embeddings. "
+                    f"Error: {type(exc).__name__}: {exc}")
 
         self.transformer = load_transformer(
             os.path.join(job_config.wan22_pretrained_model_name_or_path,
@@ -99,6 +140,16 @@ class VA_Server:
             )
             self.streaming_vae_half = WanVAEStreamingWrapper(vae_half)
 
+    @staticmethod
+    def _load_text_embed_dim(model_root: str) -> int:
+        cfg_path = os.path.join(model_root, "text_encoder", "config.json")
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            return 4096
+        return int(cfg.get("d_model", 4096))
+
     def _get_t5_prompt_embeds(
         self,
         prompt=None,
@@ -113,6 +164,15 @@ class VA_Server:
         prompt = [prompt] if isinstance(prompt, str) else prompt
         prompt = [prompt_clean(u) for u in prompt]
         batch_size = len(prompt)
+
+        if self.text_encoder is None:
+            prompt_embeds = torch.zeros(
+                (batch_size * num_videos_per_prompt, max_sequence_length,
+                 self.text_embed_dim),
+                device=device,
+                dtype=dtype,
+            )
+            return prompt_embeds
 
         text_inputs = self.tokenizer(
             prompt,
@@ -653,6 +713,8 @@ class VA_Server:
             pred_action_lst.append(actions)
         pred_latent = torch.cat(pred_latent_lst, dim=2)
         pred_action = torch.cat(pred_action_lst, dim=1).flatten(1)
+        np.save(os.path.join(self.save_root, "pred_action.npy"),
+                pred_action.cpu().numpy())
         self.transformer.clear_cache(self.cache_name)
         self.streaming_vae.clear_cache()
         if self.streaming_vae_half:
@@ -660,13 +722,34 @@ class VA_Server:
         del self.transformer
         del self.streaming_vae_half
         del self.text_encoder
-        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         decoded_video = self.decode_one_video(pred_latent, 'np')[0]
         export_to_video(decoded_video, os.path.join(self.save_root, "demo.mp4"), fps=10)
 
 def run(args):    
     
     config = VA_CONFIGS[args.config_name]
+    if args.model_root is not None:
+        config.wan22_pretrained_model_name_or_path = args.model_root
+    if not os.path.isdir(config.wan22_pretrained_model_name_or_path):
+        raise FileNotFoundError(
+            "Missing pretrained model directory: "
+            f"{config.wan22_pretrained_model_name_or_path}. "
+            "Set env `WAN22_PRETRAINED_MODEL_NAME_OR_PATH` or pass `--model_root`."
+        )
+    if args.prompt is not None:
+        config.prompt = args.prompt
+    if args.input_img_path is not None:
+        config.input_img_path = args.input_img_path
+    if args.num_chunks_to_infer is not None:
+        config.num_chunks_to_infer = args.num_chunks_to_infer
+    if args.num_inference_steps is not None:
+        config.num_inference_steps = args.num_inference_steps
+    if args.action_num_inference_steps is not None:
+        config.action_num_inference_steps = args.action_num_inference_steps
+    if args.skip_text_encoder:
+        config.skip_text_encoder = True
     port = config.port if args.port is None else args.port
     if args.save_root is not None:
         config.save_root = args.save_root
@@ -710,6 +793,47 @@ def main():
         type=str,
         default=None,
         help='save root'
+    )
+    parser.add_argument(
+        "--model_root",
+        type=str,
+        default=None,
+        help="Pretrained model root directory (should contain `vae/`, `tokenizer/`, `text_encoder/`, `transformer/`).",
+    )
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        default=None,
+        help="Override prompt for i2va generation.",
+    )
+    parser.add_argument(
+        "--input_img_path",
+        type=str,
+        default=None,
+        help="Override input image folder for i2va generation.",
+    )
+    parser.add_argument(
+        "--num_chunks_to_infer",
+        type=int,
+        default=None,
+        help="Override number of chunks to infer in i2va generation.",
+    )
+    parser.add_argument(
+        "--num_inference_steps",
+        type=int,
+        default=None,
+        help="Override diffusion steps for video generation.",
+    )
+    parser.add_argument(
+        "--action_num_inference_steps",
+        type=int,
+        default=None,
+        help="Override diffusion steps for action generation.",
+    )
+    parser.add_argument(
+        "--skip_text_encoder",
+        action="store_true",
+        help="Skip loading text encoder weights (uses dummy prompt embeddings). Useful for partial checkpoint downloads.",
     )
     args = parser.parse_args()
     run(args)
